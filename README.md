@@ -17,6 +17,7 @@ macOS menu bar system monitor -- real-time power consumption, CPU usage, and RAM
   - Turns red at >80%, pulses at >95%
 - **Detail panel** -- Click to see breakdowns (CPU/GPU/ANE power, per-core CPU, Active/Wired/Compressed memory)
 - **Trend charts** -- Mini line charts with 60-sample history (Swift Charts)
+- **Configurable** -- Choose which metrics to display, adjust refresh interval (1-10s)
 - **Low overhead** -- Target: <20MB memory, <1% CPU
 - **Menu bar only** -- No Dock icon (LSUIElement)
 
@@ -24,30 +25,89 @@ macOS menu bar system monitor -- real-time power consumption, CPU usage, and RAM
 
 - macOS 14.0 (Sonoma) or later
 - Apple Silicon or Intel Mac
-- Swift 5.9+ / Xcode 15+ (for building from source)
+- Xcode Command Line Tools (`xcode-select --install`)
 
-## Install from GitHub
+## Install
+
+### First time install
 
 ```bash
+# 1. Clone the repo
 git clone https://github.com/ChristopherCC-Liu/MacPowerMeter.git
+
+# 2. Enter the directory
 cd MacPowerMeter
+
+# 3. Run the installer (builds + installs + creates CLI command)
+#    You will be prompted for your password (needed to create /usr/local/bin/powermeter)
 ./install.sh
 ```
 
-This will:
-1. Build the release binary via Swift Package Manager
-2. Create a `.app` bundle and copy it to `/Applications/`
-3. Install a `powermeter` CLI command to `/usr/local/bin/`
+### Update to latest version
+
+If you already have a `MacPowerMeter` directory from a previous install:
+
+```bash
+# Enter your existing directory
+cd MacPowerMeter
+
+# Pull the latest changes
+git pull origin main
+
+# Reinstall
+./install.sh
+```
+
+### If you get "directory already exists" error
+
+```bash
+# Option A: Remove old directory and start fresh
+rm -rf MacPowerMeter
+git clone https://github.com/ChristopherCC-Liu/MacPowerMeter.git
+cd MacPowerMeter
+./install.sh
+
+# Option B: Update inside the existing directory
+cd MacPowerMeter
+git pull origin main
+./install.sh
+```
+
+### What the installer does
+
+1. Compiles the release binary via Swift Package Manager (`swift build --configuration release`)
+2. Creates a `.app` bundle with proper Info.plist
+3. Copies the `.app` to `/Applications/MacPowerMeter.app`
+4. Creates a `powermeter` CLI command at `/usr/local/bin/powermeter`
 
 ## Usage
 
+After installation, use any of these methods to launch:
+
 ```bash
-powermeter          # Launch (appears in menu bar)
-powermeter stop     # Quit
-powermeter status   # Check if running
+# From terminal
+powermeter              # Launch (appears in menu bar)
+powermeter stop         # Quit the app
+powermeter status       # Check if running
+powermeter help         # Show all commands
 ```
 
-Or launch from Spotlight: search "MacPowerMeter".
+Or launch from **Spotlight**: press Cmd+Space, type "MacPowerMeter", hit Enter.
+
+Or double-click `/Applications/MacPowerMeter.app` in Finder.
+
+The app appears as an icon in your menu bar (no Dock icon). Click it to open the detail panel.
+
+## Settings
+
+Click the menu bar item to open the detail panel. At the bottom you'll find settings:
+
+- **Refresh interval** -- 1 / 2 / 5 / 10 seconds
+- **Status Bar** -- Toggle power, CPU, RAM display independently
+- **Launch at Login** -- Start automatically on boot
+- **Quit** -- Exit the app
+
+Settings take effect immediately and persist across app restarts.
 
 ## Uninstall
 
@@ -56,12 +116,14 @@ cd MacPowerMeter
 ./install.sh uninstall
 ```
 
+This removes `/Applications/MacPowerMeter.app` and `/usr/local/bin/powermeter`.
+
 ## Architecture
 
 ```
 MacPowerMeter/
   Models/         SystemMetrics (immutable struct) + MetricsHistory (ring buffer, 60 samples)
-  Collectors/     CPUCollector (Mach API) / MemoryCollector (vm_statistics64) / PowerCollector (IOReport)
+  Collectors/     CPUCollector (Mach API) / MemoryCollector (vm_statistics64) / PowerCollector (strategy)
   Engine/         MetricsEngine actor -- async let parallel collection, AsyncStream output
   ViewModels/     @Observable ViewModel -- subscribes to engine, drives UI
   Views/
@@ -82,15 +144,13 @@ PowerCollector --+
 
 ### Power Monitoring
 
-Power data is collected via Apple's private `IOReport` framework, loaded dynamically with `dlopen`. If IOReport is unavailable (e.g., sandboxed environment), power metrics gracefully degrade to 0 and the power section is hidden.
+Power data collection uses a strategy pattern with automatic fallback:
 
-## Settings
+1. **IOReport** (primary) -- Apple's private framework for energy model data. Provides per-component breakdown (CPU/GPU/ANE). Loaded dynamically via `dlopen`.
+2. **SMC** (fallback) -- Direct AppleSMC access via IOKit. Reads hardware power keys (PSTR, PHPC, PCPG). Works when IOReport is unavailable.
+3. **Degraded mode** -- If both methods fail, the power section is hidden automatically.
 
-Click the menu bar item to open the detail panel, then adjust:
-
-- **Refresh interval** -- 1 / 2 / 5 / 10 seconds
-- **Visible metrics** -- Toggle power, CPU, RAM independently
-- **Launch at Login** -- Start automatically on boot
+Supports both Apple Silicon (little-endian SMC) and Intel Mac (big-endian SMC).
 
 ## Build from Source
 
@@ -104,9 +164,23 @@ swift build --configuration release
 # Run directly (without .app bundle)
 .build/release/MacPowerMeter
 
-# Create .app bundle only (no install)
+# Create .app bundle only (without installing to /Applications)
 ./create-app-bundle.sh
 ```
+
+## Troubleshooting
+
+**"zsh: no such file or directory: ./install.sh"**
+Make sure you are inside the `MacPowerMeter` directory: `cd MacPowerMeter`
+
+**"destination path already exists"**
+You already have the directory. Update instead: `cd MacPowerMeter && git pull origin main && ./install.sh`
+
+**Power shows 0W or is hidden**
+Power monitoring requires non-sandboxed execution. If running from Xcode, disable App Sandbox. The installed `.app` bundle is non-sandboxed by default.
+
+**Build fails with "swift: command not found"**
+Install Xcode Command Line Tools: `xcode-select --install`
 
 ## License
 
