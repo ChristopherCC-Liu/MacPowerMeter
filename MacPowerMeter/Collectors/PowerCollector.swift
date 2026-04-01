@@ -3,6 +3,8 @@
 //
 // 通过 IOReport 私有框架采集系统功耗数据
 // 使用 dlopen/dlsym 动态加载，不可用时优雅降级
+//
+// Apple Silicon 通道名: PCPU (P-core) / ECPU (E-core) / GPU / ANE / DRAM
 
 import Foundation
 import Darwin
@@ -13,6 +15,8 @@ struct PowerMetrics: Sendable {
     let cpuPower: Double
     let gpuPower: Double
     let anePower: Double
+
+    static let zero = PowerMetrics(totalPower: 0, cpuPower: 0, gpuPower: 0, anePower: 0)
 }
 
 /// 功耗采集器
@@ -20,7 +24,7 @@ struct PowerMetrics: Sendable {
 /// 降级方案: IOReport 不可用时返回全零，isAvailable = false
 final class PowerCollector: DataProvider, @unchecked Sendable {
 
-    /// IOReport 是否成功加载
+    /// IOReport 是否成功加载并创建了订阅
     private(set) var isAvailable: Bool = false
 
     // MARK: - IOReport 函数指针类型
@@ -67,13 +71,11 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
     /// IOReport 订阅句柄
     private var subscription: CFDictionary?
 
-    /// 保护内部状态的锁
-    private let lock = NSLock()
-
     // MARK: - 采样间隔
 
     /// 两次采样之间的间隔（秒）
-    private let sampleInterval: TimeInterval = 0.1
+    /// 500ms 是 Stats/asitop 等成熟工具验证过的可靠间隔
+    private let sampleInterval: TimeInterval = 0.5
 
     // MARK: - 初始化
 
@@ -130,18 +132,15 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
 
     func collect() async throws -> PowerMetrics {
         guard isAvailable else {
-            return PowerMetrics(totalPower: 0, cpuPower: 0, gpuPower: 0, anePower: 0)
+            return .zero
         }
-
-        return try lock.withLock {
-            try samplePower()
-        }
+        return try await samplePower()
     }
 
     // MARK: - 采样
 
     /// 执行两次采样并计算 delta，得到实时功耗
-    private func samplePower() throws -> PowerMetrics {
+    private func samplePower() async throws -> PowerMetrics {
         guard let sub = subscription,
               let createSamples,
               let createSamplesDelta,
@@ -156,8 +155,8 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
             throw CollectorError.ioReportUnavailable
         }
 
-        // 等待采样间隔
-        Thread.sleep(forTimeInterval: sampleInterval)
+        // 异步等待采样间隔（不阻塞线程）
+        try await Task.sleep(for: .seconds(sampleInterval))
 
         // 第二次采样
         guard let sample2 = createSamples(sub, nil, nil)?.takeRetainedValue() else {
@@ -176,14 +175,13 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
     /// 从 delta 样本中解析各组件的功耗
     private func parsePowerFromDelta(_ delta: CFDictionary, interval: TimeInterval) -> PowerMetrics {
         guard let channelGetChannelName, let simpleGetIntegerValue else {
-            return PowerMetrics(totalPower: 0, cpuPower: 0, gpuPower: 0, anePower: 0)
+            return .zero
         }
 
-        // delta 实际上是一个 CFDictionary，其中包含 IOReportChannels 数组
-        guard let nsDict = delta as? NSDictionary,
-              let channels = nsDict["IOReportChannels"] as? [NSDictionary]
-        else {
-            return PowerMetrics(totalPower: 0, cpuPower: 0, gpuPower: 0, anePower: 0)
+        // delta 是 CFDictionary，toll-free bridge 到 NSDictionary
+        let nsDict = delta as NSDictionary
+        guard let channelsArray = nsDict["IOReportChannels"] as? NSArray else {
+            return .zero
         }
 
         var cpuEnergy: Int64 = 0
@@ -191,40 +189,41 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
         var aneEnergy: Int64 = 0
         var totalEnergy: Int64 = 0
 
-        for channelDict in channels {
-            guard let cfDict = channelDict as CFDictionary as CFDictionary? else { continue }
+        for i in 0..<channelsArray.count {
+            guard let channelDict = channelsArray[i] as? NSDictionary else { continue }
+            let cfDict = channelDict as CFDictionary
 
             let name = channelGetChannelName(cfDict)?.takeUnretainedValue() as String? ?? ""
             let value = simpleGetIntegerValue(cfDict, 0)
 
+            // 跳过负值或零值
+            guard value > 0 else { continue }
+
             let lowerName = name.lowercased()
 
-            if lowerName.contains("cpu") && lowerName.contains("energy") {
+            // Apple Silicon 通道名: pcpu, ecpu, gpu, ane, dram
+            // 不包含 "energy" 后缀，直接按组件名匹配
+            if lowerName.contains("cpu") {
                 cpuEnergy += value
-            } else if lowerName.contains("gpu") && lowerName.contains("energy") {
+            } else if lowerName.contains("gpu") {
                 gpuEnergy += value
-            } else if lowerName.contains("ane") && lowerName.contains("energy") {
+            } else if lowerName.contains("ane") {
                 aneEnergy += value
             }
 
-            // 累计总能量
-            if lowerName.contains("energy") {
-                totalEnergy += value
-            }
+            // 累计所有 Energy Model 通道的能量
+            totalEnergy += value
         }
 
-        // IOReport 返回的能量单位通常是 mJ（毫焦耳），除以间隔得到 mW，再转 W
+        // IOReport 返回的能量单位是 mJ（毫焦耳）
+        // 功率(W) = 能量(mJ) / (时间间隔(s) * 1000)
         let toWatts = 1.0 / (interval * 1000.0)
-        let cpuPower = Double(cpuEnergy) * toWatts
-        let gpuPower = Double(gpuEnergy) * toWatts
-        let anePower = Double(aneEnergy) * toWatts
-        let totalPower = Double(totalEnergy) * toWatts
 
         return PowerMetrics(
-            totalPower: max(totalPower, 0),
-            cpuPower: max(cpuPower, 0),
-            gpuPower: max(gpuPower, 0),
-            anePower: max(anePower, 0)
+            totalPower: max(Double(totalEnergy) * toWatts, 0),
+            cpuPower: max(Double(cpuEnergy) * toWatts, 0),
+            gpuPower: max(Double(gpuEnergy) * toWatts, 0),
+            anePower: max(Double(aneEnergy) * toWatts, 0)
         )
     }
 }

@@ -16,7 +16,8 @@ struct MacPowerMeterApp: App {
             VStack(spacing: 0) {
                 MetricsPanel(
                     metrics: viewModel.currentMetrics,
-                    history: viewModel.history
+                    history: viewModel.history,
+                    isPowerAvailable: viewModel.isPowerAvailable
                 )
 
                 Divider()
@@ -26,7 +27,7 @@ struct MacPowerMeterApp: App {
         } label: {
             StatusBarLabel(
                 metrics: viewModel.currentMetrics,
-                showPower: viewModel.showPower,
+                showPower: viewModel.showPower && viewModel.isPowerAvailable,
                 showCPU: viewModel.showCPU,
                 showMemory: viewModel.showMemory
             )

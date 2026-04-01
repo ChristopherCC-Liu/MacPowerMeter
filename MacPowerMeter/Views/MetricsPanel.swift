@@ -11,10 +11,13 @@ struct MetricsPanel: View {
 
     let metrics: SystemMetrics
     let history: MetricsHistory
+    var isPowerAvailable: Bool = true
 
     var body: some View {
         VStack(spacing: 8) {
-            powerCard
+            if isPowerAvailable {
+                powerCard
+            }
             cpuCard
             memoryCard
             trendsSection
@@ -165,10 +168,12 @@ struct MetricsPanel: View {
     private var trendsSection: some View {
         VStack(spacing: 6) {
             let entries = history.entries
-            MiniChart(
-                data: entries.map(\.totalPower),
-                type: .power
-            )
+            if isPowerAvailable {
+                MiniChart(
+                    data: entries.map(\.totalPower),
+                    type: .power
+                )
+            }
             MiniChart(
                 data: entries.map(\.cpuUsage),
                 type: .cpu
