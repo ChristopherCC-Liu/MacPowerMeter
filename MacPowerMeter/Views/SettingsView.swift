@@ -9,18 +9,14 @@ import SwiftUI
 /// 提供刷新间隔选择、显示项开关、开机自启和退出按钮
 struct SettingsView: View {
 
-    /// 刷新间隔（秒）
-    @AppStorage("refreshInterval") private var refreshInterval: Double = 2
-    /// 是否显示功耗
-    @AppStorage("showPower") private var showPower = true
-    /// 是否显示 CPU
-    @AppStorage("showCPU") private var showCPU = true
-    /// 是否显示内存
-    @AppStorage("showMemory") private var showMemory = true
-    /// 开机自启
+    @Environment(MetricsViewModel.self) private var viewModel
+
+    /// 开机自启（独立于 ViewModel，控制 SMAppService）
     @AppStorage("launchAtLogin") private var launchAtLogin = false
 
     var body: some View {
+        @Bindable var viewModel = viewModel
+
         VStack(alignment: .leading, spacing: 12) {
             // 标题
             Text("Settings")
@@ -33,7 +29,7 @@ struct SettingsView: View {
                 Text("Refresh")
                     .font(.system(.body, design: .rounded))
                 Spacer()
-                Picker("", selection: $refreshInterval) {
+                Picker("", selection: $viewModel.refreshInterval) {
                     Text("1s").tag(1.0)
                     Text("2s").tag(2.0)
                     Text("5s").tag(5.0)
@@ -51,15 +47,15 @@ struct SettingsView: View {
                     .font(.system(.subheadline, design: .rounded))
                     .foregroundStyle(.secondary)
 
-                Toggle("Power", isOn: $showPower)
+                Toggle("Power", isOn: $viewModel.showPower)
                     .toggleStyle(.switch)
                     .controlSize(.small)
 
-                Toggle("CPU", isOn: $showCPU)
+                Toggle("CPU", isOn: $viewModel.showCPU)
                     .toggleStyle(.switch)
                     .controlSize(.small)
 
-                Toggle("Memory", isOn: $showMemory)
+                Toggle("Memory", isOn: $viewModel.showMemory)
                     .toggleStyle(.switch)
                     .controlSize(.small)
             }

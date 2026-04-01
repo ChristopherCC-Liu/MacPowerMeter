@@ -26,22 +26,32 @@ final class MetricsViewModel {
     // MARK: - 设置（与 SettingsView 的 @AppStorage 同步）
 
     /// 刷新间隔（秒）
-    var refreshInterval: TimeInterval = 2.0
+    var refreshInterval: TimeInterval = 2.0 {
+        didSet {
+            UserDefaults.standard.set(refreshInterval, forKey: "refreshInterval")
+            Task { await engine.updateInterval(refreshInterval) }
+        }
+    }
 
     /// 是否显示功耗
-    var showPower: Bool = true
+    var showPower: Bool = true {
+        didSet { UserDefaults.standard.set(showPower, forKey: "showPower") }
+    }
 
     /// 是否显示 CPU
-    var showCPU: Bool = true
+    var showCPU: Bool = true {
+        didSet { UserDefaults.standard.set(showCPU, forKey: "showCPU") }
+    }
 
     /// 是否显示内存
-    var showMemory: Bool = true
+    var showMemory: Bool = true {
+        didSet { UserDefaults.standard.set(showMemory, forKey: "showMemory") }
+    }
 
     // MARK: - 私有状态
 
     private let engine: MetricsEngine
     nonisolated(unsafe) private var streamTask: Task<Void, Never>?
-    nonisolated(unsafe) private var intervalObserver: Task<Void, Never>?
 
     // MARK: - 初始化
 
@@ -57,7 +67,6 @@ final class MetricsViewModel {
 
     deinit {
         streamTask?.cancel()
-        intervalObserver?.cancel()
     }
 
     // MARK: - 生命周期
@@ -76,16 +85,12 @@ final class MetricsViewModel {
                 self.history.append(metrics)
             }
         }
-
-        startIntervalObserver()
     }
 
     /// 停止指标采集
     func stop() {
         streamTask?.cancel()
         streamTask = nil
-        intervalObserver?.cancel()
-        intervalObserver = nil
         Task {
             await engine.stop()
         }
@@ -124,29 +129,4 @@ final class MetricsViewModel {
             ? defaults.bool(forKey: "showMemory") : true
     }
 
-    /// 监听 UserDefaults 中 refreshInterval 的变化
-    /// 当用户在 SettingsView 修改间隔时，同步到 Engine
-    private func startIntervalObserver() {
-        intervalObserver = Task {
-            let defaults = UserDefaults.standard
-            var lastInterval = self.refreshInterval
-
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(for: .seconds(0.5))
-                } catch {
-                    break
-                }
-
-                let stored = defaults.double(forKey: "refreshInterval")
-                let newInterval = stored > 0 ? stored : 2.0
-
-                if newInterval != lastInterval {
-                    lastInterval = newInterval
-                    self.refreshInterval = newInterval
-                    await self.engine.updateInterval(newInterval)
-                }
-            }
-        }
-    }
 }

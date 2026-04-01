@@ -1,10 +1,9 @@
 // PowerCollector.swift
 // MacPowerMeter
 //
-// 通过 IOReport 私有框架采集系统功耗数据
-// 使用 dlopen/dlsym 动态加载，不可用时优雅降级
-//
-// Apple Silicon 通道名: PCPU (P-core) / ECPU (E-core) / GPU / ANE / DRAM
+// 功耗采集 facade
+// 优先使用 IOReport 私有框架，fallback 到 SMC 直读
+// 两种方式均不可用时优雅降级 (isAvailable = false)
 
 import Foundation
 import Darwin
@@ -19,12 +18,49 @@ struct PowerMetrics: Sendable {
     static let zero = PowerMetrics(totalPower: 0, cpuPower: 0, gpuPower: 0, anePower: 0)
 }
 
-/// 功耗采集器
-/// 主方案: 使用 IOReport "Energy Model" channel 订阅获取实时功耗
-/// 降级方案: IOReport 不可用时返回全零，isAvailable = false
+/// 功耗采集器 (Facade)
+/// 优先 IOReport，fallback SMC，均不可用则降级
 final class PowerCollector: DataProvider, @unchecked Sendable {
 
-    /// IOReport 是否成功加载并创建了订阅
+    private let strategy: (any PowerStrategy)?
+    private(set) var isAvailable: Bool = false
+
+    init() {
+        // 优先 IOReport
+        let ioReport = IOReportPowerStrategy()
+        if ioReport.isAvailable {
+            strategy = ioReport
+            isAvailable = true
+            return
+        }
+
+        // Fallback: SMC 直读
+        let smc = SMCPowerCollector()
+        if smc.isAvailable {
+            strategy = smc
+            isAvailable = true
+            return
+        }
+
+        // 均不可用
+        strategy = nil
+    }
+
+    // MARK: - DataProvider
+
+    func collect() async throws -> PowerMetrics {
+        guard let strategy else { return .zero }
+        return try await strategy.collect()
+    }
+}
+
+// MARK: - IOReport 策略实现
+
+/// 通过 IOReport 私有框架采集功耗数据
+/// 使用 dlopen/dlsym 动态加载 Energy Model channel
+/// Apple Silicon 通道名: PCPU (P-core) / ECPU (E-core) / GPU / ANE / DRAM
+final class IOReportPowerStrategy: PowerStrategy, @unchecked Sendable {
+
     private(set) var isAvailable: Bool = false
 
     // MARK: - IOReport 函数指针类型
@@ -128,7 +164,7 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
         isAvailable = true
     }
 
-    // MARK: - DataProvider
+    // MARK: - PowerStrategy
 
     func collect() async throws -> PowerMetrics {
         guard isAvailable else {
@@ -144,8 +180,8 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
         guard let sub = subscription,
               let createSamples,
               let createSamplesDelta,
-              let channelGetChannelName,
-              let simpleGetIntegerValue
+              self.channelGetChannelName != nil,
+              self.simpleGetIntegerValue != nil
         else {
             throw CollectorError.ioReportUnavailable
         }
@@ -202,7 +238,6 @@ final class PowerCollector: DataProvider, @unchecked Sendable {
             let lowerName = name.lowercased()
 
             // Apple Silicon 通道名: pcpu, ecpu, gpu, ane, dram
-            // 不包含 "energy" 后缀，直接按组件名匹配
             if lowerName.contains("cpu") {
                 cpuEnergy += value
             } else if lowerName.contains("gpu") {

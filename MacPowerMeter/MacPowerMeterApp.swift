@@ -23,6 +23,7 @@ struct MacPowerMeterApp: App {
                 Divider()
 
                 SettingsView()
+                    .environment(viewModel)
             }
         } label: {
             StatusBarLabel(

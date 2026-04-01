@@ -7,12 +7,21 @@ import Foundation
 import Testing
 @testable import MacPowerMeter
 
-@Suite("MetricsViewModel 测试")
+@Suite("MetricsViewModel 测试", .serialized)
 @MainActor
 struct MetricsViewModelTests {
 
+    /// 每个测试前清除 UserDefaults 中的设置 key，避免测试间互相污染
+    private func cleanDefaults() {
+        let keys = ["refreshInterval", "showPower", "showCPU", "showMemory"]
+        for key in keys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
     @Test("初始状态为零值")
     func initialStateIsZero() {
+        cleanDefaults()
         let vm = MetricsViewModel(autoStart: false)
         #expect(vm.currentMetrics == SystemMetrics.zero)
         #expect(vm.history.count == 0)
@@ -23,6 +32,7 @@ struct MetricsViewModelTests {
 
     @Test("默认设置值正确")
     func defaultSettings() {
+        cleanDefaults()
         let vm = MetricsViewModel(autoStart: false)
         #expect(vm.showPower == true)
         #expect(vm.showCPU == true)
@@ -32,6 +42,7 @@ struct MetricsViewModelTests {
 
     @Test("格式化属性输出正确格式")
     func formattedPropertiesAreCorrect() {
+        cleanDefaults()
         let vm = MetricsViewModel(autoStart: false)
 
         // 格式验证: 初始零值
@@ -42,6 +53,7 @@ struct MetricsViewModelTests {
 
     @Test("设置属性可以修改")
     func settingsCanBeModified() {
+        cleanDefaults()
         let vm = MetricsViewModel(autoStart: false)
         vm.showPower = false
         vm.showCPU = false
