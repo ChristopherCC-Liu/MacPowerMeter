@@ -197,44 +197,74 @@ final class SMCPowerCollector: PowerStrategy, @unchecked Sendable {
         let ui16Type = fourCharCode("ui16")
         let ui32Type = fourCharCode("ui32")
 
+        // Apple Silicon SMC 使用原生 little-endian 字节序
+        // Intel Mac SMC 使用 big-endian 字节序
+        // 使用条件编译处理两种架构
         switch dataType {
         case sp78Type:
-            // signed 14.2 fixed-point (实际是 signed 7.8: 高字节整数 + 低字节小数/256)
+            // signed 7.8 fixed-point: 高字节整数 + 低字节小数/256
             guard dataSize >= 2 else { return nil }
+            #if arch(arm64)
+            let raw = Int16(Int16(bytes.1) << 8 | Int16(bytes.0))
+            #else
             let raw = Int16(Int16(bytes.0) << 8 | Int16(bytes.1))
+            #endif
             return Double(raw) / 256.0
 
         case fltType:
-            // 32-bit IEEE 754 float, big-endian
+            // 32-bit IEEE 754 float
             guard dataSize >= 4 else { return nil }
+            #if arch(arm64)
+            let raw = UInt32(bytes.3) << 24
+                | UInt32(bytes.2) << 16
+                | UInt32(bytes.1) << 8
+                | UInt32(bytes.0)
+            #else
             let raw = UInt32(bytes.0) << 24
                 | UInt32(bytes.1) << 16
                 | UInt32(bytes.2) << 8
                 | UInt32(bytes.3)
+            #endif
             return Double(Float(bitPattern: raw))
 
         case ui16Type:
-            // UInt16 big-endian
             guard dataSize >= 2 else { return nil }
+            #if arch(arm64)
+            let raw = UInt16(bytes.1) << 8 | UInt16(bytes.0)
+            #else
             let raw = UInt16(bytes.0) << 8 | UInt16(bytes.1)
+            #endif
             return Double(raw)
 
         case ui32Type:
-            // UInt32 big-endian
             guard dataSize >= 4 else { return nil }
+            #if arch(arm64)
+            let raw = UInt32(bytes.3) << 24
+                | UInt32(bytes.2) << 16
+                | UInt32(bytes.1) << 8
+                | UInt32(bytes.0)
+            #else
             let raw = UInt32(bytes.0) << 24
                 | UInt32(bytes.1) << 16
                 | UInt32(bytes.2) << 8
                 | UInt32(bytes.3)
+            #endif
             return Double(raw)
 
         default:
-            // 未知类型，尝试作为 flt 解码 (常见 fallback)
+            // 未知类型，尝试作为 flt 解码
             guard dataSize >= 4 else { return nil }
+            #if arch(arm64)
+            let raw = UInt32(bytes.3) << 24
+                | UInt32(bytes.2) << 16
+                | UInt32(bytes.1) << 8
+                | UInt32(bytes.0)
+            #else
             let raw = UInt32(bytes.0) << 24
                 | UInt32(bytes.1) << 16
                 | UInt32(bytes.2) << 8
                 | UInt32(bytes.3)
+            #endif
             let floatVal = Float(bitPattern: raw)
             // 合理性检查: 功率值应在 0-1000W 范围
             if floatVal >= 0 && floatVal < 1000 {
