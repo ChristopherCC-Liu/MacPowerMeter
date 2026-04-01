@@ -43,18 +43,26 @@ struct MetricsPanel: View {
                         .foregroundStyle(.secondary)
                 }
 
-                // 分项功耗 — SMC fallback 模式下可能只有总功耗
-                let hasBreakdown = metrics.cpuPower > 0
-                    || metrics.gpuPower > 0
-                    || metrics.anePower > 0
+                // 分项功耗
+                // IOReport 模式: 有 CPU/GPU/ANE 完整分项
+                // SMC 模式: 可能只有 CPU，GPU/ANE 为 0
+                let hasFullBreakdown = metrics.cpuPower > 0
+                    && metrics.gpuPower > 0
 
-                if hasBreakdown {
+                if hasFullBreakdown {
+                    // IOReport: 完整分项
                     powerSubItem(label: "CPU", value: metrics.cpuPower, total: metrics.totalPower)
                     powerSubItem(label: "GPU", value: metrics.gpuPower, total: metrics.totalPower)
-                    powerSubItem(label: "ANE", value: metrics.anePower, total: metrics.totalPower)
-                } else {
-                    // SMC 模式: 只显示总功耗 EnergyBar
-                    // 笔记本最大功耗约 140W (M3 Max)
+                    if metrics.anePower > 0 {
+                        powerSubItem(label: "ANE", value: metrics.anePower, total: metrics.totalPower)
+                    }
+                } else if metrics.cpuPower > 0 && metrics.totalPower > 0 {
+                    // SMC: 有 CPU 和总功率，估算其他
+                    let otherPower = max(metrics.totalPower - metrics.cpuPower, 0)
+                    powerSubItem(label: "CPU", value: metrics.cpuPower, total: metrics.totalPower)
+                    powerSubItem(label: "Other", value: otherPower, total: metrics.totalPower)
+                } else if metrics.totalPower > 0 {
+                    // 只有总功率
                     EnergyBar(
                         value: min(metrics.totalPower / 140.0, 1.0),
                         style: .power,
